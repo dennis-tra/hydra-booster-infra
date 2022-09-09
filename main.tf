@@ -365,7 +365,8 @@ resource "aws_ecs_task_definition" "hydra-booster" {
         { name = "HYDRA_PROVIDER_STORE", value = "dynamodb://table=${aws_dynamodb_table.main.name},ttl=24h,queryLimit=10000" },
         { name = "HYDRA_STORE_THE_INDEX_ADDR", value = "https://infra.cid.contact/multihash" },
         { name = "HYDRA_DELEGATED_ROUTING_TIMEOUT", value = "1000" },
-        { name = "HYDRA_DB", value = "dynamodb://table=${aws_dynamodb_table.ipns.name}" }
+        { name = "HYDRA_DB", value = "dynamodb://table=${aws_dynamodb_table.ipns.name}" },
+        { name = "HYDRA_PSTORE", value = "pstore"}
       ]
       essential = true
       healthCheck = {
