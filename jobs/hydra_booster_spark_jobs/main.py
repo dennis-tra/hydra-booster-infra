@@ -2,11 +2,12 @@ import sys
 import base64
 import multihash as mh
 import multiaddr as ma
+from awsglue import DynamicFrame
 from netaddr import IPAddress
 from datetime import datetime
 from awsglue.transforms import ApplyMapping
 from awsglue.utils import getResolvedOptions
-from pyspark.sql.functions import udf, explode
+from pyspark.sql.functions import udf, explode, collect_list
 from pyspark.context import SparkContext
 from pyspark import SparkFiles
 from awsglue.context import GlueContext
@@ -33,6 +34,7 @@ def partition_ip_to_country(partition):
             except Exception:
                 country = None
             yield [
+                row.date,
                 row.peer_id,
                 row.peer_id_b64,
                 row.maddr,
@@ -97,8 +99,8 @@ partition_date = "2022-09-20"  # TMP: overwrite
 
 # Get reference to peer store data
 dyf = glue_context.create_dynamic_frame.from_catalog(
-    database="hydra-test-peerstore-export",
-    table_name="peer_records_hydra_test_peerstore",
+    database="hydra-test",
+    table_name="hydra_test_peerstore",
     push_down_predicate=f"(date == '{partition_date}')",
 )
 
@@ -123,7 +125,7 @@ df = dyf.toDF()
 df = df.withColumn("peer_id_b64", udf(peer_id_to_b64)("peer_id"))
 
 # Unnest/explode multiaddress column
-df = df.select("peer_id", "peer_id_b64", explode("maddrs").alias("maddr"))  # .dropDuplicates(['maddr_str'])
+df = df.select("date", "peer_id", "peer_id_b64", explode("maddrs").alias("maddr"))  # .dropDuplicates(['maddr'])
 
 df = df \
     .withColumn("ip_address", udf(ip_addr_from_maddr)("maddr")) \
@@ -131,8 +133,26 @@ df = df \
     .withColumn("is_public", udf(is_public)("ip_address"))
 
 df = df.rdd.mapPartitions(partition_ip_to_country).toDF(
-    ["peer_id", "peer_id_b64", "maddr", "ip_address", "is_relay", "is_public", "country"])
+    ["date", "peer_id", "peer_id_b64", "maddr", "ip_address", "is_relay", "is_public", "country"])
+
+df = df.where(df["is_relay"] == False).where(df["is_public"] == True)
+
+df = df.groupBy(["date", "peer_id_b64"]).agg(collect_list('country').alias('countries'))
 
 df.show(10)
+
+dyf = DynamicFrame.fromDF(df, glue_context, "peer-store-cleansed")
+
+glue_context.write_dynamic_frame.from_options(
+    frame=dyf,
+    connection_type="s3",
+    format="glueparquet",
+    connection_options={
+        "path": "s3://dynamodb-exports-686311013710-us-east-2/hydra-test-peerstore-cleansed/2022-09-20/",
+        "partitionKeys": ["date"],
+    },
+    format_options={"compression": "gzip"},
+    transformation_ctx="peer_records_cleansed_write_1",
+)
 
 job.commit()
