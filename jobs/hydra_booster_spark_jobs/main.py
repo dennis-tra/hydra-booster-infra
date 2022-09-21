@@ -3,7 +3,7 @@ import base64
 import multihash as mh
 import multiaddr as ma
 from netaddr import IPAddress
-# from datetime import datetime
+from datetime import datetime
 from awsglue.transforms import ApplyMapping
 from awsglue.utils import getResolvedOptions
 from pyspark.sql.functions import udf, explode
@@ -29,10 +29,18 @@ def partition_ip_to_country(partition):
     with geoip2.database.Reader(SparkFiles.get(geo_db_path)) as reader:
         for row in partition:
             try:
-                country = reader.country(row.IPAddress).country.iso_code
+                country = reader.country(row.ip_address).country.iso_code
             except Exception:
                 country = None
-            yield [row.PeerID, row.PeerID_b64, row.Addr, row.IPAddress, country]
+            yield [
+                row.peer_id,
+                row.peer_id_b64,
+                row.maddr,
+                row.ip_address,
+                row.is_relay,
+                row.is_public,
+                country,
+            ]
 
 
 # Add IP-Address column
@@ -63,6 +71,9 @@ def is_relay(maddr_str):
 
 # Create Spark "User defined function" to determine if an address is private
 def is_public(ip_address_str):
+    if ip_address_str is None:
+        return False
+
     ip_address = IPAddress(ip_address_str)
     return not (
             ip_address.is_private() or
@@ -81,13 +92,14 @@ spark_context.addFile(geo_db_path)
 job = Job(glue_context)
 job.init(args['JOB_NAME'], args)
 
-# partition_date = datetime.now().strftime("%Y-%m-%d")
+partition_date = datetime.now().strftime("%Y-%m-%d")
+partition_date = "2022-09-20"  # TMP: overwrite
 
 # Get reference to peer store data
 dyf = glue_context.create_dynamic_frame.from_catalog(
     database="hydra-test-peerstore-export",
     table_name="peer_records_hydra_test_peerstore",
-    # push_down_predicate=f"(partition_0 == '{partition_date}')",
+    push_down_predicate=f"(date == '{partition_date}')",
 )
 
 # Flatten data structure
@@ -95,11 +107,11 @@ dyf = ApplyMapping.apply(
     frame=dyf,
     mappings=[
         ("AddrInfo.ID", "string", "peer_id", "string"),
-        ("AddrInfo.Addrs", "array", "maddr_strs", "array"),
+        ("AddrInfo.Addrs", "array", "maddrs", "array"),
         ("HeadID", "string", "head_id", "string"),
         ("AgentVersion", "string", "agent_version", "string"),
         ("Protocols", "array", "protocols", "array"),
-        ("partition_0", "string", "partition_0", "string")
+        ("date", "string", "date", "string")
     ],
     transformation_ctx="peer_records_flatten_1"
 )
@@ -107,18 +119,19 @@ dyf = ApplyMapping.apply(
 # Convert to Spark DataFrame
 df = dyf.toDF()
 
-# Add base64 PeerID column
+# Add base64 peer_id column
 df = df.withColumn("peer_id_b64", udf(peer_id_to_b64)("peer_id"))
 
 # Unnest/explode multiaddress column
-df = df.select("PeerID", "PeerID_b64", explode("maddr_strs").alias("maddr_str"))  # .dropDuplicates(['maddr_str'])
+df = df.select("peer_id", "peer_id_b64", explode("maddrs").alias("maddr"))  # .dropDuplicates(['maddr_str'])
 
 df = df \
-    .withColumn("ip_address", udf(ip_addr_from_maddr)("maddr_str")) \
-    .withColumn("is_relay", udf(is_relay)("maddr_str")) \
+    .withColumn("ip_address", udf(ip_addr_from_maddr)("maddr")) \
+    .withColumn("is_relay", udf(is_relay)("maddr")) \
     .withColumn("is_public", udf(is_public)("ip_address"))
 
-df = df.rdd.mapPartitions(partition_ip_to_country).toDF()
+df = df.rdd.mapPartitions(partition_ip_to_country).toDF(
+    ["peer_id", "peer_id_b64", "maddr", "ip_address", "is_relay", "is_public", "country"])
 
 df.show(10)
 
