@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "hydra-booster-spark-jobs"
+version = "0.1.0"
+description = ""
+authors = ["Dennis Trautwein <git@dtrautwein.eu>"]
+readme = "README.md"
+packages = [{include = "hydra_booster_spark_jobs"}]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+py-multihash = "^2.0.1"
+py-multiaddr = "^0.0.3"
+netaddr = "^0.8.0"
+pyspark = "^3.3.0"
+aws-glue-libs = {git = "https://github.com/awslabs/aws-glue-libs.git"}
+geoip2 = "^4.6.0"
+
+[tool.poetry.group.dev.dependencies]
+black = "^22.8.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
